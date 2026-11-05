@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TimeZone;
+import java.util.concurrent.Executors;
 
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
@@ -52,51 +53,51 @@ public class MyCookieManager extends ChannelDelegateImpl {
 
     switch (call.method) {
       case "setCookie":
-        {
-          String url = (String) call.argument("url");
-          String name = (String) call.argument("name");
-          String value = (String) call.argument("value");
-          String domain = (String) call.argument("domain");
-          String path = (String) call.argument("path");
-          String expiresDateString = (String) call.argument("expiresDate");
-          Long expiresDate = (expiresDateString != null ? new Long(expiresDateString) : null);
-          Integer maxAge = (Integer) call.argument("maxAge");
-          Boolean isSecure = (Boolean) call.argument("isSecure");
-          Boolean isHttpOnly = (Boolean) call.argument("isHttpOnly");
-          String sameSite = (String) call.argument("sameSite");
-          setCookie(url,
-                  name,
-                  value,
-                  domain,
-                  path,
-                  expiresDate,
-                  maxAge,
-                  isSecure,
-                  isHttpOnly,
-                  sameSite,
-                  result);
-        }
-        break;
+      {
+        String url = (String) call.argument("url");
+        String name = (String) call.argument("name");
+        String value = (String) call.argument("value");
+        String domain = (String) call.argument("domain");
+        String path = (String) call.argument("path");
+        String expiresDateString = (String) call.argument("expiresDate");
+        Long expiresDate = (expiresDateString != null ? new Long(expiresDateString) : null);
+        Integer maxAge = (Integer) call.argument("maxAge");
+        Boolean isSecure = (Boolean) call.argument("isSecure");
+        Boolean isHttpOnly = (Boolean) call.argument("isHttpOnly");
+        String sameSite = (String) call.argument("sameSite");
+        setCookie(url,
+                name,
+                value,
+                domain,
+                path,
+                expiresDate,
+                maxAge,
+                isSecure,
+                isHttpOnly,
+                sameSite,
+                result);
+      }
+      break;
       case "getCookies":
         result.success(getCookies((String) call.argument("url")));
         break;
       case "deleteCookie":
-        {
-          String url = (String) call.argument("url");
-          String name = (String) call.argument("name");
-          String domain = (String) call.argument("domain");
-          String path = (String) call.argument("path");
-          deleteCookie(url, name, domain, path, result);
-        }
-        break;
+      {
+        String url = (String) call.argument("url");
+        String name = (String) call.argument("name");
+        String domain = (String) call.argument("domain");
+        String path = (String) call.argument("path");
+        deleteCookie(url, name, domain, path, result);
+      }
+      break;
       case "deleteCookies":
-        {
-          String url = (String) call.argument("url");
-          String domain = (String) call.argument("domain");
-          String path = (String) call.argument("path");
-          deleteCookies(url, domain, path, result);
-        }
-        break;
+      {
+        String url = (String) call.argument("url");
+        String domain = (String) call.argument("domain");
+        String path = (String) call.argument("path");
+        deleteCookies(url, domain, path, result);
+      }
+      break;
       case "deleteAllCookies":
         deleteAllCookies(result);
         break;
@@ -111,25 +112,14 @@ public class MyCookieManager extends ChannelDelegateImpl {
     }
   }
 
-  /**
-   * Instantiating CookieManager will load the Chromium task taking a 100ish ms so we do it lazily
-   * to make sure it's done on a background thread as needed.
-   *
-   * https://github.com/facebook/react-native/blob/1903f6680d9750e244d97c3cd4a9f755a9a47c61/ReactAndroid/src/main/java/com/facebook/react/modules/network/ForwardingCookieHandler.java#L132
-   */
   static private @Nullable CookieManager getCookieManager() {
     if (cookieManager == null) {
       try {
         cookieManager = CookieManager.getInstance();
       } catch (IllegalArgumentException ex) {
-        // https://bugs.chromium.org/p/chromium/issues/detail?id=559720
         return null;
       } catch (Exception exception) {
         String message = exception.getMessage();
-        // We cannot catch MissingWebViewPackageException as it is in a private / system API
-        // class. This validates the exception's message to ensure we are only handling this
-        // specific exception.
-        // https://android.googlesource.com/platform/frameworks/base/+/master/core/java/android/webkit/WebViewFactory.java#348
         if (message != null
                 && exception
                 .getClass()
@@ -141,21 +131,38 @@ public class MyCookieManager extends ChannelDelegateImpl {
         }
       }
     }
-
     return cookieManager;
   }
 
+  private void flushAsync() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+      Executors.newSingleThreadExecutor().execute(new Runnable() {
+        @Override
+        public void run() {
+          try {
+            CookieManager manager = getCookieManager();
+            if (manager != null) {
+              manager.flush();
+            }
+          } catch (Exception e) {
+            Log.e(LOG_TAG, "Failed to flush cookies asynchronously", e);
+          }
+        }
+      });
+    }
+  }
+
   public void setCookie(String url,
-                               String name,
-                               String value,
-                               String domain,
-                               String path,
-                               Long expiresDate,
-                               Integer maxAge,
-                               Boolean isSecure,
-                               Boolean isHttpOnly,
-                               String sameSite,
-                               final MethodChannel.Result result) {
+                        String name,
+                        String value,
+                        String domain,
+                        String path,
+                        Long expiresDate,
+                        Integer maxAge,
+                        Boolean isSecure,
+                        Boolean isHttpOnly,
+                        String sameSite,
+                        final MethodChannel.Result result) {
     cookieManager = getCookieManager();
     if (cookieManager == null) {
       result.success(false);
@@ -191,7 +198,7 @@ public class MyCookieManager extends ChannelDelegateImpl {
           result.success(successful);
         }
       });
-      cookieManager.flush();
+      flushAsync();
     }
     else if (plugin != null) {
       CookieSyncManager cookieSyncMngr = CookieSyncManager.createInstance(plugin.applicationContext);
@@ -207,7 +214,6 @@ public class MyCookieManager extends ChannelDelegateImpl {
   }
 
   public List<Map<String, Object>> getCookies(final String url) {
-
     final List<Map<String, Object>> cookieListMap = new ArrayList<>();
 
     cookieManager = getCookieManager();
@@ -281,11 +287,9 @@ public class MyCookieManager extends ChannelDelegateImpl {
           }
         }
       }
-
       cookieListMap.add(cookieMap);
     }
     return cookieListMap;
-
   }
 
   public void deleteCookie(String url, String name, String domain, String path, final MethodChannel.Result result) {
@@ -309,7 +313,7 @@ public class MyCookieManager extends ChannelDelegateImpl {
           result.success(successful);
         }
       });
-      cookieManager.flush();
+      flushAsync();
     }
     else if (plugin != null) {
       CookieSyncManager cookieSyncMngr = CookieSyncManager.createInstance(plugin.applicationContext);
@@ -363,7 +367,7 @@ public class MyCookieManager extends ChannelDelegateImpl {
         cookieSyncMngr.stopSync();
         cookieSyncMngr.sync();
       } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP)
-        cookieManager.flush();
+        flushAsync();
     }
     result.success(true);
   }
@@ -382,7 +386,7 @@ public class MyCookieManager extends ChannelDelegateImpl {
           result.success(successful);
         }
       });
-      cookieManager.flush();
+      flushAsync();
     }
     else if (plugin != null) {
       CookieSyncManager cookieSyncMngr = CookieSyncManager.createInstance(plugin.applicationContext);
@@ -411,7 +415,7 @@ public class MyCookieManager extends ChannelDelegateImpl {
           result.success(successful);
         }
       });
-      cookieManager.flush();
+      flushAsync();
     }
     else if (plugin != null) {
       CookieSyncManager cookieSyncMngr = CookieSyncManager.createInstance(plugin.applicationContext);
@@ -433,7 +437,7 @@ public class MyCookieManager extends ChannelDelegateImpl {
       return;
     }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-      cookieManager.flush();
+      flushAsync();
     } else if (plugin != null) {
       CookieSyncManager cookieSyncMngr = CookieSyncManager.createInstance(plugin.applicationContext);
       cookieSyncMngr.sync();
