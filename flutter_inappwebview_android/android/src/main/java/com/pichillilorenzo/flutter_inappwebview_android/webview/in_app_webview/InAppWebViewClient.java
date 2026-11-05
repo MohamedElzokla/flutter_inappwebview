@@ -14,19 +14,19 @@ import android.webkit.CookieManager;
 import android.webkit.CookieSyncManager;
 import android.webkit.HttpAuthHandler;
 import android.webkit.RenderProcessGoneDetail;
-import android.webkit.SafeBrowsingResponse;
 import android.webkit.SslErrorHandler;
 import android.webkit.ValueCallback;
-import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
-import android.webkit.WebViewClient;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
+import androidx.webkit.SafeBrowsingResponseCompat;
+import androidx.webkit.WebResourceErrorCompat;
 import androidx.webkit.WebResourceRequestCompat;
+import androidx.webkit.WebViewClientCompat;
 import androidx.webkit.WebViewFeature;
 
 import com.pichillilorenzo.flutter_inappwebview_android.Util;
@@ -57,14 +57,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 
-public class InAppWebViewClient extends WebViewClient {
+public class InAppWebViewClientCompat extends WebViewClientCompat {
 
-  protected static final String LOG_TAG = "IAWebViewClient";
+  protected static final String LOG_TAG = "IAWebViewClientCompat";
   private InAppBrowserDelegate inAppBrowserDelegate;
   private static int previousAuthRequestFailureCount = 0;
   private static List<URLCredential> credentialsProposed = null;
 
-  public InAppWebViewClient(InAppBrowserDelegate inAppBrowserDelegate) {
+  public InAppWebViewClientCompat(InAppBrowserDelegate inAppBrowserDelegate) {
     super();
     this.inAppBrowserDelegate = inAppBrowserDelegate;
   }
@@ -73,12 +73,6 @@ public class InAppWebViewClient extends WebViewClient {
   @Override
   public boolean shouldOverrideUrlLoading(@NonNull WebView view, @NonNull WebResourceRequest request) {
     InAppWebView webView = (InAppWebView) view;
-
-    if (allowSyncUrlLoading(webView, request.getUrl().toString())) {
-      // Allow the request synchronously.
-      return false;
-    }
-
     if (webView.customSettings.useShouldOverrideUrlLoading) {
       boolean isRedirect = false;
       if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_RESOURCE_REQUEST_IS_REDIRECT)) {
@@ -94,43 +88,28 @@ public class InAppWebViewClient extends WebViewClient {
               request.isForMainFrame(),
               request.hasGesture(),
               isRedirect);
+      if (webView.regexToCancelSubFramesLoadingCompiled != null) {
+        if (request.isForMainFrame())
+          return true;
+        else {
+          Matcher m = webView.regexToCancelSubFramesLoadingCompiled.matcher(request.getUrl().toString());
+          return m.matches();
+        }
+      } else {
+        // There isn't any way to load an URL for a frame that is not the main frame,
+        // so if the request is not for the main frame, the navigation is allowed.
+        return request.isForMainFrame();
+      }
     }
-    if (webView.customSettings.regexToCancelSubFramesLoading != null && !request.isForMainFrame()) {
-      Matcher m = webView.customSettings.regexToCancelSubFramesLoading.matcher(request.getUrl().toString());
-      return m.matches();
-    }
-    if (webView.customSettings.useShouldOverrideUrlLoading) {
-      // There isn't any way to load an URL for a frame that is not the main frame,
-      // so if the request is not for the main frame, the navigation is allowed.
-      return request.isForMainFrame();
-    }
-
     return false;
   }
 
   @Override
-  public boolean shouldOverrideUrlLoading(WebView view, String url) {
-    InAppWebView webView = (InAppWebView) view;
-
-    if (allowSyncUrlLoading(webView, url)) {
-      // Allow the request synchronously.
-      return false;
-    }
-
-    if (webView.customSettings.useShouldOverrideUrlLoading) {
-      onShouldOverrideUrlLoading(webView, url, "GET", null,true, false, false);
+  public boolean shouldOverrideUrlLoading(WebView webView, String url) {
+    InAppWebView inAppWebView = (InAppWebView) webView;
+    if (inAppWebView.customSettings.useShouldOverrideUrlLoading) {
+      onShouldOverrideUrlLoading(inAppWebView, url, "GET", null,true, false, false);
       return true;
-    }
-    return false;
-  }
-
-  private boolean allowSyncUrlLoading(InAppWebView webView, String url) {
-    if (webView.customSettings.regexToAllowSyncUrlLoading != null) {
-      Matcher m = webView.customSettings.regexToAllowSyncUrlLoading.matcher(url);
-      if (m.matches()) {
-        Log.d(LOG_TAG, "Request '" + url + "' automatically allowed as it is a match for 'regexToAllowSyncUrlLoading'.");
-        return true;
-      }
     }
     return false;
   }
@@ -141,7 +120,7 @@ public class InAppWebViewClient extends WebViewClient {
     if (isForMainFrame) {
       // There isn't any way to load an URL for a frame that is not the main frame,
       // so call this only on main frame.
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && headers != null)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP)
         webView.loadUrl(url, headers);
       else
         webView.loadUrl(url);
@@ -185,7 +164,7 @@ public class InAppWebViewClient extends WebViewClient {
         defaultBehaviour(null);
       }
     };
-
+    
     if (webView.channelDelegate != null) {
       webView.channelDelegate.shouldOverrideUrlLoading(navigationAction, callback);
     } else {
@@ -199,16 +178,23 @@ public class InAppWebViewClient extends WebViewClient {
 
     if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
       String source = webView.userContentController.generateWrappedCodeForDocumentStart();
-      webView.evaluateJavascript(source, (ValueCallback<String>) null);
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+        webView.evaluateJavascript(source, (ValueCallback<String>) null);
+      } else {
+        webView.loadUrl("javascript:" + source.replaceAll("[\r\n]+", ""));
+      }
     }
   }
 
   public void loadCustomJavaScriptOnPageFinished(WebView view) {
     InAppWebView webView = (InAppWebView) view;
 
-    if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-      String source = webView.userContentController.generateWrappedCodeForDocumentEnd();
+    String source = webView.userContentController.generateWrappedCodeForDocumentEnd();
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
       webView.evaluateJavascript(source, (ValueCallback<String>) null);
+    } else {
+      webView.loadUrl("javascript:" + source.replaceAll("[\r\n]+", ""));
     }
   }
 
@@ -230,7 +216,7 @@ public class InAppWebViewClient extends WebViewClient {
       webView.channelDelegate.onLoadStart(url);
     }
   }
-
+  
   public void onPageFinished(WebView view, String url) {
     final InAppWebView webView = (InAppWebView) view;
     webView.isLoading = false;
@@ -246,13 +232,30 @@ public class InAppWebViewClient extends WebViewClient {
 
     // WebView not storing cookies reliable to local device storage
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-      CookieManager.getInstance().flush();
+      java.util.concurrent.Executors.newSingleThreadExecutor().execute(new Runnable() {
+        @Override
+        public void run() {
+          try {
+            CookieManager.getInstance().flush();
+          } catch (Exception e) {
+            Log.e(LOG_TAG, "Failed to flush cookies asynchronously", e);
+          }
+        }
+      });
     } else {
-      CookieSyncManager.getInstance().sync();
-    }
+      try {
+        CookieSyncManager.getInstance().sync();
+      } catch (Exception e) {
+        Log.e(LOG_TAG, "Failed to sync cookies", e);
+      }    }
 
-    String js = JavaScriptBridgeJS.PLATFORM_READY_JS_SOURCE();
-    webView.evaluateJavascript(js, (ValueCallback<String>) null);
+    String js = JavaScriptBridgeJS.PLATFORM_READY_JS_SOURCE;
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+      webView.evaluateJavascript(js, (ValueCallback<String>) null);
+    } else {
+      webView.loadUrl("javascript:" + js.replaceAll("[\r\n]+", ""));
+    }
 
     if (webView.channelDelegate != null) {
       webView.channelDelegate.onLoadStop(url);
@@ -269,16 +272,18 @@ public class InAppWebViewClient extends WebViewClient {
     if (inAppBrowserDelegate != null) {
       inAppBrowserDelegate.didUpdateVisitedHistory(url);
     }
-
+    
     final InAppWebView webView = (InAppWebView) view;
     if (webView.channelDelegate != null) {
       webView.channelDelegate.onUpdateVisitedHistory(url, isReload);
     }
   }
-
+  
   @RequiresApi(api = Build.VERSION_CODES.M)
   @Override
-  public void onReceivedError(WebView view, @NonNull WebResourceRequest request, @NonNull WebResourceError error) {
+  public void onReceivedError(@NonNull WebView view,
+                              @NonNull WebResourceRequest request,
+                              @NonNull WebResourceErrorCompat error) {
     final InAppWebView webView = (InAppWebView) view;
 
     if (request.isForMainFrame()) {
@@ -292,7 +297,15 @@ public class InAppWebViewClient extends WebViewClient {
       credentialsProposed = null;
 
       if (inAppBrowserDelegate != null) {
-        inAppBrowserDelegate.didFailNavigation(request.getUrl().toString(), error.getErrorCode(), error.getDescription().toString());
+        int type = -1;
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_RESOURCE_ERROR_GET_CODE)) {
+          type = error.getErrorCode();
+        }
+        String description = "";
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_RESOURCE_ERROR_GET_DESCRIPTION)) {
+          description = error.getDescription().toString();
+        }
+        inAppBrowserDelegate.didFailNavigation(request.getUrl().toString(), type, description);
       }
     }
 
@@ -345,7 +358,9 @@ public class InAppWebViewClient extends WebViewClient {
 
   @RequiresApi(api = Build.VERSION_CODES.M)
   @Override
-  public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
+  public void onReceivedHttpError(@NonNull WebView view,
+                                  @NonNull WebResourceRequest request,
+                                  @NonNull WebResourceResponse errorResponse) {
     super.onReceivedHttpError(view, request, errorResponse);
 
     final InAppWebView webView = (InAppWebView) view;
@@ -378,7 +393,7 @@ public class InAppWebViewClient extends WebViewClient {
       credentialsProposed = CredentialDatabase.getInstance(view.getContext()).getHttpAuthCredentials(host, protocol, realm, port);
 
     URLCredential credentialProposed = null;
-    if (credentialsProposed != null && !credentialsProposed.isEmpty()) {
+    if (credentialsProposed != null && credentialsProposed.size() > 0) {
       credentialProposed = credentialsProposed.get(0);
     }
 
@@ -405,7 +420,7 @@ public class InAppWebViewClient extends WebViewClient {
               handler.proceed(username, password);
               break;
             case 2:
-              if (!credentialsProposed.isEmpty()) {
+              if (credentialsProposed.size() > 0) {
                 URLCredential credential = credentialsProposed.remove(0);
                 handler.proceed(credential.getUsername(), credential.getPassword());
               } else {
@@ -429,7 +444,7 @@ public class InAppWebViewClient extends WebViewClient {
 
       @Override
       public void defaultBehaviour(@Nullable HttpAuthResponse result) {
-        InAppWebViewClient.super.onReceivedHttpAuthRequest(view, handler, host, realm);
+        InAppWebViewClientCompat.super.onReceivedHttpAuthRequest(view, handler, host, realm);
       }
 
       @Override
@@ -438,7 +453,7 @@ public class InAppWebViewClient extends WebViewClient {
         defaultBehaviour(null);
       }
     };
-
+    
     if (webView.channelDelegate != null) {
       webView.channelDelegate.onReceivedHttpAuthRequest(challenge, callback);
     } else {
@@ -488,7 +503,7 @@ public class InAppWebViewClient extends WebViewClient {
 
       @Override
       public void defaultBehaviour(@Nullable ServerTrustAuthResponse result) {
-        InAppWebViewClient.super.onReceivedSslError(view, handler, sslError);
+        InAppWebViewClientCompat.super.onReceivedSslError(view, handler, sslError);
       }
 
       @Override
@@ -497,7 +512,7 @@ public class InAppWebViewClient extends WebViewClient {
         defaultBehaviour(null);
       }
     };
-
+    
     if (webView.channelDelegate != null) {
       webView.channelDelegate.onReceivedServerTrustAuthRequest(challenge, callback);
     } else {
@@ -537,7 +552,7 @@ public class InAppWebViewClient extends WebViewClient {
                 String certificatePath = (String) response.getCertificatePath();
                 String certificatePassword = (String) response.getCertificatePassword();
                 String keyStoreType = (String) response.getKeyStoreType();
-                Util.PrivateKeyAndCertificates privateKeyAndCertificates =
+                Util.PrivateKeyAndCertificates privateKeyAndCertificates = 
                         Util.loadPrivateKeyAndCertificate(webView.plugin, certificatePath, certificatePassword, keyStoreType);
                 if (privateKeyAndCertificates != null) {
                   request.proceed(privateKeyAndCertificates.privateKey, privateKeyAndCertificates.certificates);
@@ -562,7 +577,7 @@ public class InAppWebViewClient extends WebViewClient {
 
       @Override
       public void defaultBehaviour(@Nullable ClientCertResponse result) {
-        InAppWebViewClient.super.onReceivedClientCertRequest(view, request);
+        InAppWebViewClientCompat.super.onReceivedClientCertRequest(view, request);
       }
 
       @Override
@@ -592,7 +607,10 @@ public class InAppWebViewClient extends WebViewClient {
 
   @RequiresApi(api = Build.VERSION_CODES.O_MR1)
   @Override
-  public void onSafeBrowsingHit(final WebView view, final WebResourceRequest request, final int threatType, final SafeBrowsingResponse callback) {
+  public void onSafeBrowsingHit(@NonNull final WebView view,
+                                @NonNull final WebResourceRequest request,
+                                final int threatType,
+                                @NonNull final SafeBrowsingResponseCompat callback) {
     final InAppWebView webView = (InAppWebView) view;
     final WebViewChannelDelegate.SafeBrowsingHitCallback resultCallback = new WebViewChannelDelegate.SafeBrowsingHitCallback() {
       @Override
@@ -602,14 +620,26 @@ public class InAppWebViewClient extends WebViewClient {
           boolean report = response.isReport();
           switch (action) {
             case 0:
-              callback.backToSafety(report);
+              if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_RESPONSE_BACK_TO_SAFETY)) {
+                callback.backToSafety(report);
+              } else {
+                return true;
+              }
               break;
             case 1:
-              callback.proceed(report);
+              if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_RESPONSE_PROCEED)) {
+                callback.proceed(report);
+              } else {
+                return true;
+              }
               break;
             case 2:
             default:
-              callback.showInterstitial(report);
+              if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_RESPONSE_SHOW_INTERSTITIAL)) {
+                callback.showInterstitial(report);
+              } else {
+                return true;
+              }
           }
 
           return false;
@@ -620,7 +650,7 @@ public class InAppWebViewClient extends WebViewClient {
 
       @Override
       public void defaultBehaviour(@Nullable com.pichillilorenzo.flutter_inappwebview_android.types.SafeBrowsingResponse result) {
-        InAppWebViewClient.super.onSafeBrowsingHit(view, request, threatType, callback);
+        InAppWebViewClientCompat.super.onSafeBrowsingHit(view, request, threatType, callback);
       }
 
       @Override
@@ -716,7 +746,7 @@ public class InAppWebViewClient extends WebViewClient {
     }
 
     WebResourceResponse response = null;
-    if (!webView.contentBlockerHandler.getRuleList().isEmpty()) {
+    if (webView.contentBlockerHandler.getRuleList().size() > 0) {
       try {
         response = webView.contentBlockerHandler.checkUrl(webView, request);
       } catch (Exception e) {
@@ -761,7 +791,7 @@ public class InAppWebViewClient extends WebViewClient {
 
       @Override
       public void defaultBehaviour(@Nullable Integer result) {
-        InAppWebViewClient.super.onFormResubmission(view, dontResend, resend);
+        InAppWebViewClientCompat.super.onFormResubmission(view, dontResend, resend);
       }
 
       @Override
@@ -779,7 +809,7 @@ public class InAppWebViewClient extends WebViewClient {
   }
 
   @Override
-  public void onPageCommitVisible(WebView view, String url) {
+  public void onPageCommitVisible(@NonNull WebView view, @NonNull String url) {
     super.onPageCommitVisible(view, url);
 
     final InAppWebView webView = (InAppWebView) view;
@@ -820,3 +850,4 @@ public class InAppWebViewClient extends WebViewClient {
     }
   }
 }
+
